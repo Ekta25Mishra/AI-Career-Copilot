@@ -34,6 +34,11 @@ const resumeSchema = new mongoose.Schema({
     type: Object,
     default: null
 },
+analysisStatus: {
+    type: String,
+    enum: ["not_analyzed", "analyzing", "completed", "failed"],
+    default: "not_analyzed"
+},
 },
 {timestamps:true}
 );

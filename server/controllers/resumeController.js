@@ -115,7 +115,7 @@ const getResume = async (req, res) => {
   }
 };
 
-const testAIService = async (req, res) => {
+const analyzeResumeWithAI = async (req, res) => {
   try {
     const resume = await Resume.findOne({
       user: req.user.userId,
@@ -127,16 +127,78 @@ const testAIService = async (req, res) => {
       });
     }
 
+    if (!resume.extractedText || !resume.extractedText.trim()) {
+      return res.status(400).json({
+        message: "Resume text is empty. Please upload a valid resume.",
+      });
+    }
+
+    if (resume.analysisStatus === "completed" && resume.structuredAnalysis) {
+      return res.json({
+        message: "Resume already analyzed",
+        analysis: resume.structuredAnalysis,
+      });
+    }
+    resume.analysisStatus = "analyzing";
+
+        await resume.save();
+
     const result = await analyzeResume(resume.extractedText);
 
-    resume.structuredAnalysis = result.analysis;
+    const analysis = result.analysis;
+
+    if (!analysis || typeof analysis !== "object") {
+      resume.analysisStatus = "failed";
+            await resume.save();
+      return res.status(502).json({
+        message: "AI returned an invalid analysis",
+      });
+    }
+
+    const requiredFields = [
+      "name",
+      "email",
+      "phone",
+      "skills",
+      "education",
+      "experience",
+      "projects",
+    ];
+
+    const missingFields = requiredFields.filter(
+      (field) => !(field in analysis),
+    );
+
+    if (missingFields.length > 0) {
+       resume.analysisStatus = "failed";
+            await resume.save();
+      return res.status(502).json({
+        message: "AI analysis is missing required fields",
+        missingFields,
+      });
+    }
+
+    if (
+      !Array.isArray(analysis.skills) ||
+      !Array.isArray(analysis.education) ||
+      !Array.isArray(analysis.experience) ||
+      !Array.isArray(analysis.projects)
+    ) {
+       resume.analysisStatus = "failed";
+            await resume.save();
+      return res.status(502).json({
+        message: "AI analysis contains invalid data types",
+      });
+    }
+
+    resume.structuredAnalysis = analysis;
+  resume.analysisStatus = "completed";
     await resume.save();
 
     res.json({
       message: "Resume analyzed successfully",
       analysis: resume.structuredAnalysis,
     });
-    
   } catch (err) {
     res.status(500).json({
       message: err.message,
@@ -148,5 +210,5 @@ module.exports = {
   uploadResume,
   deleteResume,
   getResume,
-  testAIService,
+  analyzeResumeWithAI,
 };

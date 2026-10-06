@@ -1,3 +1,5 @@
+const { randomUUID } = require("crypto");
+
 const getDayName = (date) => {
   return date.toLocaleDateString("en-US", {
     weekday: "long",
@@ -48,12 +50,6 @@ const generateLearningSchedule = ({
 
         const topicEstimatedHours = Number(topic.estimated_hours) || 0;
 
-        /*
-         * If the topic has subtopics,
-         * divide its estimated time across
-         * the subtopics.
-         */
-
         if (subtopics.length > 0) {
           const totalTopicMinutes = Math.round(topicEstimatedHours * 60);
 
@@ -63,12 +59,6 @@ const generateLearningSchedule = ({
 
           subtopics.forEach((subtopic, index) => {
             let subtopicMinutes = baseMinutes;
-
-            /*
-             * Give any remaining
-             * minutes to the last
-             * subtopic.
-             */
 
             if (index === subtopics.length - 1) {
               subtopicMinutes = remainingMinutes;
@@ -95,12 +85,6 @@ const generateLearningSchedule = ({
             });
           });
         } else {
-          /*
-           * If Gemini did not provide
-           * subtopics, keep the topic
-           * as one learning unit.
-           */
-
           learningUnits.push({
             skill: skill.skill || "",
 
@@ -179,6 +163,7 @@ const generateLearningSchedule = ({
       );
 
       sessions.push({
+        sessionId: randomUUID(),
         skill: currentUnit.skill,
 
         topic: currentUnit.topic,
@@ -192,6 +177,9 @@ const generateLearningSchedule = ({
         practice_tasks: currentUnit.practiceTasks,
 
         type: "learning",
+        completed: false,
+
+        completedAt: null,
       });
 
       remainingDailyMinutes -= sessionMinutes;

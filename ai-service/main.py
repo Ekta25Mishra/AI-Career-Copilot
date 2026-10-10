@@ -1,29 +1,121 @@
 from dotenv import load_dotenv
 import os
 import json
-
+import re
+import time
+from typing import Optional
+load_dotenv()
+from pydantic import BaseModel
 from fastapi import FastAPI
 from google import genai
-from google.genai import errors
-
-
-load_dotenv()
+from google.genai import errors, types
 
 app = FastAPI()
 
 client = genai.Client(
-    api_key=os.getenv("GEMINI_API_KEY")
+    api_key=os.getenv("GEMINI_API_KEY"),
+    http_options=types.HttpOptions(
+        timeout=120000,
+        retry_options=types.HttpRetryOptions(
+            attempts=1
+        )
+    )
 )
 
 
+def generate_with_retry(prompt: str):
+    models = [
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
+        "gemini-3.6-flash"
+    ]
+
+    last_error = None
+
+    for model in models:
+        for attempt in range(3):
+            try:
+                print(
+                    f"Gemini request | model={model} | "
+                    f"attempt={attempt + 1}/3",
+                    flush=True
+                )
+
+                response = client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        max_output_tokens=8192,
+                        response_mime_type="application/json"
+                    )
+                )
+
+                if not response or not response.text:
+                    raise RuntimeError(
+                        f"Gemini returned an empty response from {model}"
+                    )
+
+                print(
+                    f"Gemini response successful | model={model}",
+                    flush=True
+                )
+
+                return response
+
+            except Exception as error:
+                last_error = error
+
+                print(
+                    f"Gemini request failed | model={model} | "
+                    f"attempt={attempt + 1}/3",
+                    flush=True
+                )
+                print(error, flush=True)
+
+                temporary_error = any(
+                    marker in str(error)
+                    for marker in [
+                        "429",
+                        "500",
+                        "502",
+                        "503",
+                        "504",
+                        "RESOURCE_EXHAUSTED",
+                        "UNAVAILABLE",
+                        "INTERNAL",
+                        "temporarily unavailable",
+                        "high demand"
+                    ]
+                )
+
+                if not temporary_error:
+                    break
+
+                if attempt < 2:
+                    wait_time = 2 ** attempt
+                    print(
+                        f"Temporary Gemini error. "
+                        f"Retrying in {wait_time} seconds...",
+                        flush=True
+                    )
+                    time.sleep(wait_time)
+
+        print(
+            f"Model {model} failed. Trying next model...",
+            flush=True
+        )
+
+    raise last_error
+
 @app.get("/")
 def home():
+
     return {
         "message": "AI Career Copilot Service is running!"
     }
 
-
 def parse_json_response(text: str):
+
     text = text.strip()
 
     if text.startswith("```json"):
@@ -47,6 +139,7 @@ def analyze_resume(data: dict):
 
     # 1. Validate resume text
     if not resume_text.strip():
+
         return {
             "error": "Resume text is empty"
         }
@@ -113,16 +206,15 @@ def analyze_resume(data: dict):
         Resume:
 
         {resume_text}
-        """
+    """
 
     # 2. Call Gemini
     try:
-        response = client.models.generate_content(
-            model="gemini-3.6-flash",
-            contents=prompt
-        )
+
+        response = generate_with_retry(prompt)
 
     except errors.ServerError as error:
+
         print("Gemini server error:", error)
 
         return {
@@ -130,6 +222,7 @@ def analyze_resume(data: dict):
         }
 
     except Exception as error:
+
         print("Gemini API error:", error)
 
         return {
@@ -138,9 +231,11 @@ def analyze_resume(data: dict):
 
     # 3. Parse Gemini JSON response
     try:
+
         analysis = parse_json_response(response.text)
 
     except json.JSONDecodeError:
+
         print("Invalid JSON returned by Gemini:")
         print(response.text)
 
@@ -160,53 +255,53 @@ def analyze_job_description(data: dict):
     job_description = data.get("jobDescription", "")
 
     if not job_description.strip():
+
         return {
             "error": "Job description is empty"
         }
 
     prompt = f"""
-                You are a job description information extraction system.
+        You are a job description information extraction system.
 
-                Extract structured information from the job description below.
+        Extract structured information from the job description below.
 
-                Return ONLY valid JSON.
-                Do not use markdown.
-                Do not add explanations.
-                Do not add ```json.
+        Return ONLY valid JSON.
+        Do not use markdown.
+        Do not add explanations.
+        Do not add ```json.
 
-                Use exactly this structure:
+        Use exactly this structure:
 
-                {{
-                    "job_title": "",
-                    "required_skills": [],
-                    "preferred_skills": [],
-                    "experience": "",
-                    "responsibilities": [],
-                    "qualifications": []
-                }}
+        {{
+            "job_title": "",
+            "required_skills": [],
+            "preferred_skills": [],
+            "experience": "",
+            "responsibilities": [],
+            "qualifications": []
+        }}
 
-                Rules:
+        Rules:
 
-                1. Extract only information explicitly present in the job description.
-                2. Do not invent information.
-                3. If information is missing, use an empty string or empty array.
-                4. Keep skills as simple strings.
-                5. Keep responsibilities as an array of strings.
-                6. Keep qualifications as an array of strings.
-                7. Return valid JSON only.
+        1. Extract only information explicitly present in the job description.
+        2. Do not invent information.
+        3. If information is missing, use an empty string or empty array.
+        4. Keep skills as simple strings.
+        5. Keep responsibilities as an array of strings.
+        6. Keep qualifications as an array of strings.
+        7. Return valid JSON only.
 
-                Job Description:
+        Job Description:
 
-                {job_description}
-                """
+        {job_description}
+    """
 
     try:
-        response = client.models.generate_content(
-            model="gemini-3.6-flash",
-            contents=prompt
-        )
+
+        response = generate_with_retry(prompt)
 
     except errors.ServerError as error:
+
         print("Gemini server error:", error)
 
         return {
@@ -214,6 +309,7 @@ def analyze_job_description(data: dict):
         }
 
     except Exception as error:
+
         print("Gemini API error:", error)
 
         return {
@@ -221,9 +317,11 @@ def analyze_job_description(data: dict):
         }
 
     try:
+
         analysis = parse_json_response(response.text)
 
     except json.JSONDecodeError:
+
         print("Invalid JSON returned by Gemini:")
         print(response.text)
 
@@ -235,21 +333,25 @@ def analyze_job_description(data: dict):
         "analysis": analysis
     }
 
+
 @app.post("/analyze-skill-gap")
 def analyze_skill_gap(data: dict):
 
     resume_skills = data.get("resumeSkills", [])
+
     job_description_analysis = data.get(
         "jobDescriptionAnalysis",
         {}
     )
 
     if not isinstance(resume_skills, list):
+
         return {
             "error": "Resume skills must be an array"
         }
 
     if not isinstance(job_description_analysis, dict):
+
         return {
             "error": "Job description analysis must be an object"
         }
@@ -322,17 +424,15 @@ def analyze_skill_gap(data: dict):
         8. Keep all skill names as simple strings.
 
         9. Return JSON only.
-        10. Do not use markdown.
-        11. Do not add explanations outside the JSON.
 
-        """
+        10. Do not use markdown.
+
+        11. Do not add explanations outside the JSON.
+    """
 
     try:
 
-        response = client.models.generate_content(
-            model="gemini-3.6-flash",
-            contents=prompt
-        )
+        response = generate_with_retry(prompt)
 
     except errors.ServerError as error:
 
@@ -408,23 +508,48 @@ def generate_learning_roadmap(data: dict):
 
     # Validate input
     if not isinstance(missing_skills, list):
+
         return {
             "error": "Missing skills must be an array"
         }
 
     if len(missing_skills) == 0:
+
         return {
             "error": "No missing skills provided"
         }
 
     if hours_per_day <= 0:
+
         return {
             "error": "Hours per day must be greater than 0"
         }
 
     if days_per_week <= 0:
+
         return {
             "error": "Days per week must be greater than 0"
+        }
+
+    
+    # Default to weekdays when the user has not selected specific days.
+    if available_days is None or available_days == []:
+        available_days = [
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+        ]
+
+    if not isinstance(available_days, list):
+        return {
+            "error": "Available days must be an array"
+        }
+
+    if not all(isinstance(day, str) for day in available_days):
+        return {
+            "error": "Each available day must be a string"
         }
 
     if not available_days:
@@ -432,7 +557,9 @@ def generate_learning_roadmap(data: dict):
             "error": "Available days are required"
         }
 
+
     if not start_date:
+
         return {
             "error": "Start date is required"
         }
@@ -536,14 +663,11 @@ def generate_learning_roadmap(data: dict):
         13. Do not use markdown.
 
         14. Do not add explanations outside the JSON.
-        """
+    """
 
     try:
 
-        response = client.models.generate_content(
-            model="gemini-3.6-flash",
-            contents=prompt
-        )
+        response = generate_with_retry(prompt)
 
     except errors.ServerError as error:
 
@@ -591,4 +715,300 @@ def generate_learning_roadmap(data: dict):
     return {
         "plan": plan
     }
+
+
+class InterviewGenerationRequest(BaseModel):
+
+    resume_analysis: dict
+
+    job_description_analysis: dict
+
+    skill_gap_analysis: dict
+
+    previous_weak_questions: list = []
+
+    user_questions: list = []
+
+    excluded_known_questions: list = []
+
+    number_of_questions: int = 25
+
+    difficulty: str = "medium"
+
+
+@app.post("/generate-interview-questions")
+def generate_interview_questions(
+    request: InterviewGenerationRequest
+):
+
+    try:
+
+        minimum_questions = max(
+            25,
+            int(request.number_of_questions)
+        )
+
+        prompt = f"""
+            You are an expert technical interviewer.
+
+            Create an adaptive mock interview for a candidate.
+
+            CANDIDATE RESUME ANALYSIS:
+            {json.dumps(
+                request.resume_analysis,
+                indent=2
+            )}
+
+            JOB DESCRIPTION ANALYSIS:
+            {json.dumps(
+                request.job_description_analysis,
+                indent=2
+            )}
+
+            SKILL GAP ANALYSIS:
+            {json.dumps(
+                request.skill_gap_analysis,
+                indent=2
+            )}
+
+            WEAK QUESTIONS FROM PREVIOUS INTERVIEWS:
+            {json.dumps(
+                request.previous_weak_questions,
+                indent=2
+            )}
+
+            QUESTIONS PROVIDED BY THE USER:
+            {json.dumps(
+                request.user_questions,
+                indent=2
+            )}
+
+            QUESTIONS THAT MUST NOT BE REPEATED:
+            {json.dumps(
+                request.excluded_known_questions,
+                indent=2
+            )}
+
+            REQUIRED DIFFICULTY:
+            {request.difficulty}
+
+            IMPORTANT RULES:
+
+            1. Generate at least {minimum_questions} total questions.
+
+            2. Questions should be highly relevant to:
+            - candidate resume
+            - candidate projects
+            - required job skills
+            - missing skills
+            - preferred skills
+            - technical experience
+
+            3. Previous weak questions may be reused because
+            the candidate needs additional practice on them.
+
+            4. Do NOT repeat previous questions that the candidate
+            already answered successfully.
+
+            5. User-provided questions must be preserved and included.
+
+            6. Do not create duplicate or nearly identical questions.
+
+            7. Generate genuinely new questions whenever possible.
+
+            8. Include technical, skill-based and behavioral questions.
+
+            9. Every question must contain a useful ideal answer.
+
+            10. The ideal answer should be suitable for evaluating a
+            candidate, not an extremely long textbook answer.
+
+            11. Do not invent candidate experience that is not present
+            in the resume.
+
+            12. Return ONLY valid JSON.
+
+            Return exactly this structure:
+
+            {{
+                "questions": [
+                    {{
+                        "question": "string",
+                        "type": "technical",
+                        "skill": "string",
+                        "difficulty": "medium",
+                        "source": "ai_generated",
+                        "idealAnswer": "string"
+                    }}
+                ]
+            }}
+
+            Allowed type values:
+            - technical
+            - skill_based
+            - behavioral
+
+            Allowed source values:
+            - ai_generated
+            - previous_weak
+            - user_added
+        """
+
+        # ========================================================
+        # GEMINI WITH RETRY + FALLBACK
+        # ========================================================
+
+        response = generate_with_retry(prompt)
+
+        # ========================================================
+        # PARSE RESPONSE
+        # ========================================================
+
+        result = parse_json_response(
+            response.text
+        )
+
+        questions = result.get(
+            "questions",
+            []
+        )
+
+        if not isinstance(questions, list):
+
+            return {
+                "error": "AI returned invalid questions format"
+            }
+
+        return {
+            "questions": questions
+        }
+
+    except errors.ServerError as error:
+
+        print(
+            "Interview Gemini server error:",
+            error
+        )
+
+        return {
+            "error":
+                "Gemini service is temporarily unavailable. Please try again later."
+        }
+
+    except json.JSONDecodeError as error:
+
+        print(
+            "Interview JSON parsing error:",
+            error
+        )
+
+        return {
+            "error":
+                "Gemini returned invalid JSON for interview questions"
+        }
+
+    except Exception as error:
+
+        print(
+            "Interview generation error:",
+            error
+        )
+
+        return {
+            "error": str(error)
+        }
+
+
+class InterviewAnswerEvaluationRequest(BaseModel):
+    question: str
+    question_type: str
+    skill: str = ""
+    difficulty: str = "medium"
+    ideal_answer: str = ""
+    user_answer: str
+
+
+@app.post("/evaluate-interview-answer")
+def evaluate_interview_answer(request: InterviewAnswerEvaluationRequest):
+    prompt = f"""
+You are an expert technical interviewer.
+
+Evaluate the candidate's answer to the interview question.
+
+INTERVIEW QUESTION:
+{request.question}
+
+QUESTION TYPE:
+{request.question_type}
+
+SKILL:
+{request.skill}
+
+DIFFICULTY:
+{request.difficulty}
+
+IDEAL ANSWER:
+{request.ideal_answer}
+
+CANDIDATE ANSWER:
+{request.user_answer}
+
+Evaluate only what the candidate actually said.
+Do not assume knowledge that was not demonstrated.
+
+Return ONLY valid JSON:
+
+{{
+    "score": 0,
+    "feedback": "string",
+    "strengths": [
+        "string"
+    ],
+    "improvementAreas": [
+        "string"
+    ],
+    "idealAnswer": "string"
+}}
+
+Rules:
+
+- score must be between 0 and 10.
+- 0-3 = poor understanding
+- 4-6 = partial/basic understanding
+- 7-8 = good understanding
+- 9-10 = excellent understanding
+- Be fair and concise.
+- Do not penalize the candidate for using different wording.
+- If the answer is partially correct, give partial credit.
+- Do not invent experience or knowledge.
+"""
+
+    try:
+        response = generate_with_retry(prompt)
+
+        raw_text = response.text.strip()
+
+        if raw_text.startswith("```"):
+            raw_text = re.sub(
+                r"^```(?:json)?\s*|\s*```$",
+                "",
+                raw_text,
+                flags=re.IGNORECASE
+            ).strip()
+
+        evaluation = json.loads(raw_text)
+
+        return {
+            "evaluation": evaluation
+        }
+
+    except Exception as error:
+        print(
+            f"Interview answer evaluation error: {error}",
+            flush=True
+        )
+
+        return {
+            "error": str(error)
+        }
 

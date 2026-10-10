@@ -4,11 +4,14 @@ const { generateLearningSchedule } = require("../utils/learningScheduler");
 const { generateLearningRoadmap } = require("../services/aiService");
 const { calculateLearningProgress } = require("../utils/learningProgress");
 const { getLearningPlanStatus } = require("../utils/learningStatus");
+const { getSessionStatus } = require("../utils/learningSessionStatus");
+const { rescheduleMissedSessions } = require("../utils/adaptiveScheduler");
 
 const createLearningPlan = async (req, res) => {
   try {
     const {
       jobDescriptionId,
+      skill: requestedSkill,
       hoursPerDay,
       daysPerWeek,
       availableDays,
@@ -16,96 +19,120 @@ const createLearningPlan = async (req, res) => {
       targetDate,
     } = req.body;
 
-    // 1. Validate required fields
-    if (!jobDescriptionId || !hoursPerDay || !daysPerWeek || !startDate) {
+    const normalizedAvailableDays =
+      Array.isArray(availableDays) && availableDays.length > 0
+        ? availableDays
+        : ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+
+    const skill = String(requestedSkill || "").trim();
+    const dailyHours = Number(hoursPerDay);
+    const weeklyDays = Number(daysPerWeek);
+
+    // 1. Validate required learning details.
+    if (
+      !skill ||
+      !Number.isFinite(dailyHours) ||
+      !Number.isFinite(weeklyDays) ||
+      !startDate
+    ) {
       return res.status(400).json({
-        message: "Required learning plan details are missing",
+        message:
+          "Skill, hours per day, days per week, and start date are required.",
       });
     }
 
-    // 2. Find user's job description
-    const jobDescription = await JobDescription.findOne({
-      _id: jobDescriptionId,
-      user: req.user.userId,
-    });
-
-    if (!jobDescription) {
-      return res.status(404).json({
-        message: "Job description not found",
-      });
-    }
-
-    // 3. Skill-gap analysis must exist
-    if (!jobDescription.skillGapAnalysis) {
+    if (dailyHours < 0.5 || dailyHours > 12) {
       return res.status(400).json({
-        message: "Please complete skill gap analysis first",
+        message: "Hours per day must be between 0.5 and 12.",
       });
     }
 
-    // 4. Get missing required skills
-    const missingSkills =
-      jobDescription.skillGapAnalysis.missing_required_skills || [];
-
-    if (!Array.isArray(missingSkills)) {
+    if (!Number.isInteger(weeklyDays) || weeklyDays < 1 || weeklyDays > 7) {
       return res.status(400).json({
-        message: "Missing skills data is invalid",
+        message: "Days per week must be between 1 and 7.",
       });
     }
 
-    if (missingSkills.length === 0) {
-      return res.status(400).json({
-        message: "No missing required skills found",
-      });
-    }
-
-    // 5. Validate hours per day
-    if (hoursPerDay < 0.5) {
-      return res.status(400).json({
-        message: "Hours per day must be at least 0.5",
-      });
-    }
-
-    // 6. Validate days per week
-    if (daysPerWeek < 1 || daysPerWeek > 7) {
-      return res.status(400).json({
-        message: "Days per week must be between 1 and 7",
-      });
-    }
-
-    // 7. Validate available days
     if (availableDays && !Array.isArray(availableDays)) {
       return res.status(400).json({
-        message: "Available days must be an array",
+        message: "Available days must be an array.",
       });
     }
 
-    // 8. Calculate weekly learning capacity
-    const weeklyHours = hoursPerDay * daysPerWeek;
+    // 2. Validate dates.
+    const start = new Date(startDate);
 
-    // 9. Calculate total learning capacity
-    let totalLearningHours = null;
+    if (Number.isNaN(start.getTime())) {
+      return res.status(400).json({
+        message: "Invalid start date.",
+      });
+    }
+
+    let target = null;
 
     if (targetDate) {
-      const start = new Date(startDate);
+      target = new Date(targetDate);
 
-      const target = new Date(targetDate);
-
-      if (Number.isNaN(start.getTime()) || Number.isNaN(target.getTime())) {
+      if (Number.isNaN(target.getTime()) || target <= start) {
         return res.status(400).json({
-          message: "Invalid start date or target date",
+          message: "Target date must be a valid date after the start date.",
+        });
+      }
+    }
+
+    // 3. Resolve skills from either a job description or custom input.
+    let jobDescription = null;
+    let missingSkills = [];
+
+    if (jobDescriptionId) {
+      jobDescription = await JobDescription.findOne({
+        _id: jobDescriptionId,
+        user: req.user.userId,
+      });
+
+      if (!jobDescription) {
+        return res.status(404).json({
+          message: "Job description not found.",
         });
       }
 
-      if (target <= start) {
+      if (!jobDescription.skillGapAnalysis) {
         return res.status(400).json({
-          message: "Target date must be after start date",
+          message: "Please complete skill gap analysis first.",
         });
       }
 
-      const differenceInMilliseconds = target - start;
+      const jobMissingSkills =
+        jobDescription.skillGapAnalysis.missing_required_skills || [];
 
+      if (!Array.isArray(jobMissingSkills)) {
+        return res.status(400).json({
+          message: "Missing skills data is invalid.",
+        });
+      }
+
+      // If a particular skill was selected, build a roadmap for that skill.
+      // Otherwise, retain the existing behavior of using all missing skills.
+      missingSkills = skill ? [skill] : jobMissingSkills;
+
+      if (missingSkills.length === 0) {
+        return res.status(400).json({
+          message: "No missing required skills found.",
+        });
+      }
+    } else {
+      // Custom skill: no job description or skill-gap analysis required.
+      missingSkills = [skill];
+    }
+
+    // 4. Calculate learning capacity.
+    const weeklyHours = dailyHours * weeklyDays;
+
+    let totalLearningHours = null;
+
+    if (target) {
       const totalDays = Math.ceil(
-        differenceInMilliseconds / (1000 * 60 * 60 * 24),
+        (target.getTime() - start.getTime()) / (1000 * 60 * 60 * 24),
       );
 
       const totalWeeks = Math.ceil(totalDays / 7);
@@ -113,84 +140,88 @@ const createLearningPlan = async (req, res) => {
       totalLearningHours = weeklyHours * totalWeeks;
     }
 
-    // 10. Generate learning roadmap using AI
+    // 5. Generate the AI roadmap.
     const result = await generateLearningRoadmap({
       missingSkills,
-      hoursPerDay,
-      daysPerWeek,
-      availableDays: availableDays || [],
+      hoursPerDay: dailyHours,
+      daysPerWeek: weeklyDays,
+      availableDays: normalizedAvailableDays,
       startDate,
       targetDate: targetDate || "",
       weeklyHours,
     });
 
-    const plan = result.plan;
+    const plan = result?.plan;
 
-    // Generate day-by-day learning schedule
+    if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
+      return res.status(502).json({
+        message: "AI returned an invalid learning roadmap.",
+      });
+    }
+
+    if (!Array.isArray(plan.skills)) {
+      return res.status(502).json({
+        message: "AI learning roadmap contains invalid skills data.",
+      });
+    }
+
+    console.log("AI PLAN SKILLS:", JSON.stringify(plan.skills, null, 2));
+    console.log("AVAILABLE DAYS:", availableDays);
+    console.log("START DATE:", startDate, "TARGET DATE:", targetDate);
+
+    // 6. Generate the day-by-day schedule.
     const scheduleResult = generateLearningSchedule({
       plan,
-      hoursPerDay,
-      availableDays: availableDays || [],
+      hoursPerDay: dailyHours,
+      availableDays: normalizedAvailableDays,
       startDate,
-      targetDate,
+      targetDate: targetDate || undefined,
     });
+
+    if (!scheduleResult || !Array.isArray(scheduleResult.schedule)) {
+      return res.status(500).json({
+        message: "Failed to generate learning schedule.",
+      });
+    }
 
     const schedule = scheduleResult.schedule;
 
     const scheduleStatistics = scheduleResult.statistics;
 
     const totalSessions = schedule.reduce((total, day) => {
-      if (!Array.isArray(day.sessions)) {
-        return total;
-      }
-
-      return total + day.sessions.length;
+      return total + (Array.isArray(day.sessions) ? day.sessions.length : 0);
     }, 0);
 
+    console.log("NORMALIZED DAYS:", normalizedAvailableDays);
+    console.log("SCHEDULE DAYS:", schedule.length);
+    console.log("TOTAL SESSIONS:", totalSessions);
+    console.log(
+      "SCHEDULE PREVIEW:",
+      JSON.stringify(schedule.slice(0, 2), null, 2),
+    );
+
     const totalHours = schedule.reduce((total, day) => {
-      if (!Array.isArray(day.sessions)) {
-        return total;
-      }
+      if (!Array.isArray(day.sessions)) return total;
 
       return (
         total +
-        day.sessions.reduce((sessionTotal, session) => {
-          const duration = Number(session.duration_minutes) || 0;
-
-          return sessionTotal + duration / 60;
+        day.sessions.reduce((sum, session) => {
+          return sum + (Number(session.duration_minutes) || 0) / 60;
         }, 0)
       );
     }, 0);
 
-    if (!scheduleResult || !Array.isArray(schedule)) {
-      return res.status(500).json({
-        message: "Failed to generate learning schedule",
-      });
-    }
-
-    // 11. Validate AI response
-    if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
-      return res.status(502).json({
-        message: "AI returned an invalid learning roadmap",
-      });
-    }
-
-    if (!Array.isArray(plan.skills)) {
-      return res.status(502).json({
-        message: "AI learning roadmap contains invalid skills data",
-      });
-    }
-
-    // 12. Create learning plan
+    // 7. Save the learning plan.
     const learningPlan = await LearningPlan.create({
       user: req.user.userId,
-      jobDescription: jobDescription._id,
+      ...(jobDescription ? { jobDescription: jobDescription._id } : {}),
+      skill,
       missingSkills,
-      hoursPerDay,
-      daysPerWeek,
-      availableDays: availableDays || [],
-      startDate,
-      targetDate: targetDate || null,
+      hoursPerDay: dailyHours,
+      daysPerWeek: weeklyDays,
+      availableDays: normalizedAvailableDays,
+      startDate: start,
+      targetDate: target,
       plan,
       schedule,
       progress: {
@@ -203,12 +234,12 @@ const createLearningPlan = async (req, res) => {
       status: "generated",
     });
 
-    // 13. Return result
-    res.status(201).json({
+    // 8. Return the created roadmap.
+    return res.status(201).json({
       message: "Learning roadmap generated successfully",
-
       learningPlan: {
         id: learningPlan._id,
+        skill: learningPlan.skill,
         missingSkills: learningPlan.missingSkills,
         hoursPerDay: learningPlan.hoursPerDay,
         daysPerWeek: learningPlan.daysPerWeek,
@@ -220,14 +251,15 @@ const createLearningPlan = async (req, res) => {
         status: learningPlan.status,
         plan: learningPlan.plan,
         schedule: learningPlan.schedule,
+        progress: learningPlan.progress,
         scheduleStatistics,
       },
     });
   } catch (error) {
-    console.error("Create learning plan error:", error.message);
+    console.error("Create learning plan error:", error);
 
-    res.status(500).json({
-      message: "Failed to generate learning roadmap",
+    return res.status(500).json({
+      message: "Failed to generate learning roadmap.",
     });
   }
 };
@@ -354,6 +386,7 @@ const completeLearningSession = async (req, res) => {
 
     session.completed = true;
     session.completedAt = new Date();
+    session.status = "completed";
 
     learningPlan.markModified("schedule");
 
@@ -747,6 +780,116 @@ const getLearningProgress = async (req, res) => {
   }
 };
 
+const getUpcomingLearningSessions = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const learningPlan = await LearningPlan.findOne({
+      _id: id,
+      user: req.user.userId,
+    });
+
+    if (!learningPlan) {
+      return res.status(404).json({
+        message: "Learning plan not found",
+      });
+    }
+
+    const upcomingSessions = [];
+
+    for (const day of learningPlan.schedule || []) {
+      if (!day || !Array.isArray(day.sessions)) {
+        continue;
+      }
+
+      for (const session of day.sessions) {
+        if (session.completed !== true) {
+          upcomingSessions.push({
+            date: day.date,
+            day: day.day,
+            sessionId: session.sessionId,
+            skill: session.skill,
+            topic: session.topic,
+            subtopic: session.subtopic,
+            duration_minutes: session.duration_minutes,
+            learning_tasks: session.learning_tasks,
+            practice_tasks: session.practice_tasks,
+            status: getSessionStatus({ session, date: day.date }),
+          });
+        }
+      }
+    }
+
+    return res.json({
+      message: "Upcoming learning sessions retrieved successfully",
+      totalSessions: upcomingSessions.length,
+      sessions: upcomingSessions,
+    });
+  } catch (error) {
+    console.error("Get upcoming learning sessions error:", error);
+
+    return res.status(500).json({
+      message: "Failed to retrieve upcoming learning sessions",
+    });
+  }
+};
+
+const rescheduleMissedLearningSessions = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const learningPlan = await LearningPlan.findOne({
+      _id: id,
+      user: req.user.userId,
+    });
+
+    if (!learningPlan) {
+      return res.status(404).json({
+        message: "Learning plan not found",
+      });
+    }
+
+    const result = rescheduleMissedSessions({
+      schedule: learningPlan.schedule,
+      hoursPerDay: learningPlan.hoursPerDay,
+      availableDays: learningPlan.availableDays,
+    });
+
+    learningPlan.schedule = result.schedule;
+
+    learningPlan.markModified("schedule");
+
+    const progress = calculateLearningProgress(learningPlan.schedule);
+
+    learningPlan.progress = progress;
+
+    learningPlan.status = getLearningPlanStatus(progress);
+
+    await learningPlan.save();
+
+    return res.json({
+      message:
+        result.rescheduledSessions > 0
+          ? "Missed sessions rescheduled successfully"
+          : "No missed sessions found",
+
+      rescheduledSessions: result.rescheduledSessions,
+
+      progress,
+
+      status: learningPlan.status,
+
+      schedule: learningPlan.schedule,
+    });
+  } catch (error) {
+    console.error("Reschedule missed sessions error:", error);
+
+    return res.status(500).json({
+      message: "Failed to reschedule missed sessions",
+    });
+  }
+};
+
 module.exports = {
   createLearningPlan,
   getLearningPlan,
@@ -756,5 +899,7 @@ module.exports = {
   getNextLearningSession,
   getTodayLearningSessions,
   getLearningDashboard,
-  getLearningProgress
+  getLearningProgress,
+  getUpcomingLearningSessions,
+  rescheduleMissedLearningSessions,
 };

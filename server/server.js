@@ -7,6 +7,8 @@ const authRoutes = require("./routes/authRoutes");
 const resumeRoutes = require("./routes/resumeRoutes");
 const JobDescriptionRoutes = require("./routes/jobDescriptionRoutes");
 const learningPlanRoutes = require("./routes/learningPlanRoutes");
+const interviewRoutes = require("./routes/interviewRoutes");
+const interviewSessionRoutes = require("./routes/interviewSessionRoutes");
 
 const app = express();
 const PORT = 3000;
@@ -19,6 +21,8 @@ app.use("/api/user", userRoutes);
 app.use("/api/resume", resumeRoutes);
 app.use("/api/job-description", JobDescriptionRoutes);
 app.use("/api/learning-plan", learningPlanRoutes);
+app.use("/api/interview", interviewRoutes);
+app.use("/api/interview-session", interviewSessionRoutes);
 connectDB();
 
 app.get("/", (req, res) => {

@@ -165,21 +165,15 @@ const generateLearningSchedule = ({
       sessions.push({
         sessionId: randomUUID(),
         skill: currentUnit.skill,
-
         topic: currentUnit.topic,
-
         subtopic: currentUnit.subtopic,
-
         duration_minutes: sessionMinutes,
-
         learning_tasks: currentUnit.learningTasks,
-
         practice_tasks: currentUnit.practiceTasks,
-
         type: "learning",
         completed: false,
-
         completedAt: null,
+        status: "pending",
       });
 
       remainingDailyMinutes -= sessionMinutes;

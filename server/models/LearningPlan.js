@@ -1,3 +1,4 @@
+
 const mongoose = require("mongoose");
 
 const learningPlanSchema = new mongoose.Schema(
@@ -8,10 +9,18 @@ const learningPlanSchema = new mongoose.Schema(
       required: true,
     },
 
+    // Optional: custom skill plans do not require a job description.
     jobDescription: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "JobDescription",
-      required: true,
+      default: null,
+    },
+
+    // Main skill shown in the Learning Roadmap UI.
+    skill: {
+      type: String,
+      trim: true,
+      default: "",
     },
 
     missingSkills: {
@@ -62,27 +71,24 @@ const learningPlanSchema = new mongoose.Schema(
       type: Array,
       default: [],
     },
+
     progress: {
       completedSessions: {
         type: Number,
         default: 0,
       },
-
       totalSessions: {
         type: Number,
         default: 0,
       },
-
       completedHours: {
         type: Number,
         default: 0,
       },
-
       totalHours: {
         type: Number,
         default: 0,
       },
-
       percentage: {
         type: Number,
         default: 0,

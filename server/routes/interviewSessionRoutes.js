@@ -1,40 +1,34 @@
+
 const express = require("express");
 const router = express.Router();
 
 const protect = require("../middleware/authMiddleware");
 
 const {
-    scheduleInterview,
-    startInterview,
-    getCurrentQuestion,
-    submitAnswer,
-    getInterviewReport
+  scheduleInterview,
+  startInterview,
+  getCurrentQuestion,
+  submitAnswer,
+  getInterviewReport,
+  getInterviewHistory,
 } = require("../controllers/interviewSessionController");
 
+// Interview history: all statuses
+router.get("/history", protect, getInterviewHistory);
+
+// Schedule an interview
 router.post("/schedule", protect, scheduleInterview);
 
-router.post(
-    "/:interviewId/start",
-    protect,
-    startInterview
-);
+// Start an interview
+router.post("/:interviewId/start", protect, startInterview);
 
-router.get(
-    "/:interviewId/current-question",
-    protect,
-    getCurrentQuestion
-);
+// Get the current unanswered question
+router.get("/:interviewId/current-question", protect, getCurrentQuestion);
 
-router.post(
-    "/:interviewId/answer",
-    protect,
-    submitAnswer
-);
+// Submit an answer
+router.post("/:interviewId/answer", protect, submitAnswer);
 
-router.get(
-    "/:interviewId/report",
-    protect,
-    getInterviewReport
-);
+// Get the final report (completed interviews only)
+router.get("/:interviewId/report", protect, getInterviewReport);
 
 module.exports = router;

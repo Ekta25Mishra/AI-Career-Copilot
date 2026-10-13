@@ -16,6 +16,8 @@ import Login from "./pages/Login";
 import Register from "./pages/Register";
 import { authApi } from "./services/authApi";
 import LearningRoadmap from "./pages/LearningRoadmap";
+import UserProfile from "./pages/UserProfile"
+import InterviewPrep from "./pages/InterviewPrep";
 
 import "./App.css";
 
@@ -52,7 +54,9 @@ function AuthenticatedApp() {
       case "learning":
         return <LearningRoadmap />;
       case "interviews":
-        return <FeaturePlaceholder activePage={activePage} />;
+        return <InterviewPrep />;
+        case "profile":
+          return <UserProfile />;
 
       default:
         return <Dashboard onNavigate={setActivePage} />;
